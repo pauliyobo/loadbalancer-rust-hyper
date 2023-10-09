@@ -1,14 +1,16 @@
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Client, Request, Response, Uri};
+use hyper::{Body, Client, Request, Response, Uri, StatusCode};
+use tokio::time::timeout;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
 };
-use std::time::Instant;
+use std::time::{Instant, Duration};
+
 use tracing::{info, error};
 
 /// A server to which the load balancer will route requests
@@ -33,15 +35,19 @@ impl Server {
         let path = req.uri().path().to_owned();
         let uri = format!("{}:{}{}", self.addr, self.port, path);
         info!("Forwarding request to {}", uri);
-        let mut request = Request::from(req);
+        let mut request = req;
         *request.uri_mut() = Uri::from_str(&uri)?;
-        Ok(Client::new().request(request).await?)
+        let now = Instant::now();
+        let response = Client::new().request(request).await?;
+        info!("{:?}", response);
+        info!("Received response in {}", humantime::format_duration(now.elapsed()));
+        Ok(response)
     }
 }
 
 #[derive(Clone, Debug)]
 struct Balancer {
-    servers: Vec<Server>,
+    pub servers: Vec<Server>,
     next_request_index: Arc<Mutex<AtomicU64>>,
 }
 
@@ -78,6 +84,35 @@ impl Balancer {
     }
 }
 
+/// checks periodically which servers are healthy
+async fn heartbeat(balancer: Arc<Balancer>) -> Result<()> {
+    for srv in balancer.servers.iter() {
+        let uri: Uri = format!("http://{}:{}/", srv.addr, srv.port).parse()?;
+        let _ = tokio::spawn(async {
+            info!("Checking for healthyness at {}", uri);
+            let fut = Client::new().get(uri);
+            match timeout(Duration::from_secs(10), fut).await {
+                Ok(res) => {
+                    match res {
+                        Ok(r) => {
+                            if r.status().is_success() {
+                                info!("Server is healthy.");
+                            }
+                        },
+                        Err(_) => {
+                            error!("Server is not healthy.");
+                        }
+                    }
+                },
+                Err(_) => {
+                    error!("Server not healthy.");
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
 async fn handler(balancer: Arc<Balancer>, req: Request<Body>) -> Result<Response<Body>> {
     let res = balancer.distribute(req);
     Ok(res.await?)
@@ -89,18 +124,27 @@ async fn main() {
     tracing_subscriber::fmt::init();
     // Create the load balancer
     let state = Arc::new(Balancer::new().with_server(&"127.0.0.1:8000".parse().unwrap()));
+    let state_clone = state.clone();
     let addr: SocketAddr = "0.0.0.0:80".parse().unwrap();
     let sv = make_service_fn(move |con: &AddrStream| {
         info!("Incoming connection from {}", con.remote_addr());
         let state = state.clone();
         async move {
-            Ok(service_fn(move |req: Request<Body>| {
+            anyhow::Ok(service_fn(move |req: Request<Body>| {
                 handler(state.clone(), req)
             }))
         }
     });
 
     let server = hyper::Server::bind(&addr).serve(sv);
+    let _ = tokio::spawn(async move {
+        loop {
+            let state = state_clone.clone();
+            info!("Running health check.");
+            heartbeat(state)        .await.unwrap();
+            tokio::time::sleep(Duration::from_secs(15)).await;
+        }
+    });
 
     if let Err(e) = server.await {
         error!("{}", e);
