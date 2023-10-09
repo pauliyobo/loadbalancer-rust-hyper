@@ -1,4 +1,5 @@
 use anyhow::{Ok, Result};
+use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Client, Request, Response, Uri};
 use std::net::SocketAddr;
@@ -7,6 +8,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
 };
+use std::time::Instant;
+use tracing::{info, error};
 
 /// A server to which the load balancer will route requests
 #[derive(Clone, Debug)]
@@ -29,6 +32,7 @@ impl Server {
     pub async fn forward(&self, req: Request<Body>) -> Result<Response<Body>> {
         let path = req.uri().path().to_owned();
         let uri = format!("{}:{}{}", self.addr, self.port, path);
+        info!("Forwarding request to {}", uri);
         let mut request = Request::from(req);
         *request.uri_mut() = Uri::from_str(&uri)?;
         Ok(Client::new().request(request).await?)
@@ -69,6 +73,7 @@ impl Balancer {
     pub async fn distribute(&self, req: Request<Body>) -> Result<Response<Body>> {
         // get the index of the server that will receive the request
         let index = self.next_id();
+        info!("Forwarding request to server at index {}", index);
         self.servers[index].forward(req).await
     }
 }
@@ -80,10 +85,13 @@ async fn handler(balancer: Arc<Balancer>, req: Request<Body>) -> Result<Response
 
 #[tokio::main]
 async fn main() {
+    // set up logging
+    tracing_subscriber::fmt::init();
     // Create the load balancer
     let state = Arc::new(Balancer::new().with_server(&"127.0.0.1:8000".parse().unwrap()));
     let addr: SocketAddr = "0.0.0.0:80".parse().unwrap();
-    let sv = make_service_fn(move |_| {
+    let sv = make_service_fn(move |con: &AddrStream| {
+        info!("Incoming connection from {}", con.remote_addr());
         let state = state.clone();
         async move {
             Ok(service_fn(move |req: Request<Body>| {
@@ -95,6 +103,6 @@ async fn main() {
     let server = hyper::Server::bind(&addr).serve(sv);
 
     if let Err(e) = server.await {
-        println!("{}", e);
+        error!("{}", e);
     }
 }
