@@ -1,7 +1,7 @@
 use anyhow::Result;
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Client, Request, Response, Uri, StatusCode};
+use hyper::{Body, Client, Request, Response, Uri};
 use tokio::time::timeout;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -10,7 +10,6 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::{Instant, Duration};
-
 use tracing::{info, error};
 
 /// A server to which the load balancer will route requests
@@ -33,7 +32,7 @@ impl Server {
     /// Forward an incoming request from the load balancer
     pub async fn forward(&self, req: Request<Body>) -> Result<Response<Body>> {
         let path = req.uri().path().to_owned();
-        let uri = format!("{}:{}{}", self.addr, self.port, path);
+        let uri = format!("http://{}:{}{}", self.addr, self.port, path);
         info!("Forwarding request to {}", uri);
         let mut request = req;
         *request.uri_mut() = Uri::from_str(&uri)?;
@@ -123,7 +122,7 @@ async fn main() {
     // set up logging
     tracing_subscriber::fmt::init();
     // Create the load balancer
-    let state = Arc::new(Balancer::new().with_server(&"127.0.0.1:8000".parse().unwrap()));
+    let state = Arc::new(Balancer::new().with_server(&"127.0.0.1:8001".parse().unwrap()).with_server(&"127.0.0.1:8000".parse().unwrap()));
     let state_clone = state.clone();
     let addr: SocketAddr = "0.0.0.0:80".parse().unwrap();
     let sv = make_service_fn(move |con: &AddrStream| {
@@ -142,7 +141,7 @@ async fn main() {
             let state = state_clone.clone();
             info!("Running health check.");
             heartbeat(state)        .await.unwrap();
-            tokio::time::sleep(Duration::from_secs(15)).await;
+            tokio::time::sleep(Duration::from_secs(60)).await;
         }
     });
 
