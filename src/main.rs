@@ -1,7 +1,9 @@
+mod config;
+
 use anyhow::Result;
 use http_body::Body;
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Full};
+use http_body_util::BodyExt;
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -78,9 +80,9 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Balancer {
-    pub servers: Vec<Server<Full<Bytes>>>,
+    pub servers: Vec<Server<Response<BoxBody<Bytes, hyper::Error>>>>,
     next_request_index: Arc<Mutex<AtomicU64>>,
 }
 
@@ -150,22 +152,31 @@ impl Balancer {
 }*/
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     // set up logging
     tracing_subscriber::fmt::init();
+    // configuration
+    info!("Loading config");
+    let config = config::Config::from_file("config.toml").map_err(|e| {
+        error!("Failed to load configuration");
+        e
+    })?;
+    info!("configuration loaded successfully.");
     // Create the load balancer
     let state = Arc::new(
         Balancer::new()
-            .with_server(&"127.0.0.1:8001".parse().unwrap())
-            .with_server(&"127.0.0.1:8000".parse().unwrap()),
+            .with_server(&"127.0.0.1:8001".parse()?)
+            .with_server(&"127.0.0.1:8000".parse()?),
     );
-    let addr: SocketAddr = "0.0.0.0:80".parse().unwrap();
-    let listener = TcpListener::bind(addr).await.unwrap();
-
+    let addr: SocketAddr = config.listen.parse()?;
+    let listener = TcpListener::bind(addr).await?;
+    info!("Listening on {}", addr);
+    
     loop {
         let state_clone = state.clone();
-        let (stream, _) = listener.accept().await.unwrap();
+        let (stream, _) = listener.accept().await?;
         let io = TokioIo::new(stream);
+        info!("Incoming connection from {}", io.inner().peer_addr()?);
         tokio::task::spawn(async move {
             let state = state_clone.clone();
             if let Err(e) = http1::Builder::new()
