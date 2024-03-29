@@ -156,6 +156,8 @@ async fn main() -> anyhow::Result<()> {
     // set up logging
     tracing_subscriber::fmt::init();
     // configuration
+    let config = config::Config::default();
+    println!("{}", toml::to_string(&config).unwrap());
     info!("Loading config");
     let config = config::Config::from_file("config.toml").map_err(|e| {
         error!("Failed to load configuration");
@@ -168,10 +170,10 @@ async fn main() -> anyhow::Result<()> {
             .with_server(&"127.0.0.1:8001".parse()?)
             .with_server(&"127.0.0.1:8000".parse()?),
     );
-    let addr: SocketAddr = config.listen.parse()?;
+    let address = &config.load_balancer.address.unwrap_or("127.0.0.1".to_string());
+    let addr: SocketAddr = format!("{}:{}", address, config.load_balancer.port).parse()?;
     let listener = TcpListener::bind(addr).await?;
     info!("Listening on {}", addr);
-    
     loop {
         let state_clone = state.clone();
         let (stream, _) = listener.accept().await?;
