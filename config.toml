@@ -1,1 +1,11 @@
-listen = "127.0.0.1:80"
+[load_balancer]
+port = 80
+protocol = "http"
+
+[[server]]
+address = "https://google.com"
+port = 80
+
+[[server]]
+address = "https://github.com"
+port = 80

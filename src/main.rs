@@ -34,6 +34,15 @@ struct Server<B> {
     phantom: PhantomData<B>,
 }
 
+impl<B> From<config::Backend> for Server<B> {
+    fn from(value: config::Backend) -> Self {
+        Self {
+            addr: value.address,
+            port: value.port,            phantom: PhantomData,
+        }
+    }
+}
+
 impl<B> Server<B>
 where
     B: Body + Send + 'static + Unpin,
@@ -55,7 +64,7 @@ where
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>> {
         let uri = req.uri().to_string();
         debug!("Uri received from request, {}", uri);
-        let uri = format!("http://{}:{}{}", self.addr, self.port, uri);
+        let uri = format!("{}:{}{}", self.addr, self.port, uri);
         info!("Forwarding request to {}", uri);
         let mut request = req;
         *request.uri_mut() = Uri::from_str(&uri)?;
@@ -165,11 +174,9 @@ async fn main() -> anyhow::Result<()> {
     })?;
     info!("configuration loaded successfully.");
     // Create the load balancer
-    let state = Arc::new(
-        Balancer::new()
-            .with_server(&"127.0.0.1:8001".parse()?)
-            .with_server(&"127.0.0.1:8000".parse()?),
-    );
+    let mut balancer = Balancer::new();
+    balancer.servers.extend(config.server.into_iter().map(Server::from));
+    let state = Arc::new(balancer);
     let address = &config.load_balancer.address.unwrap_or("127.0.0.1".to_string());
     let addr: SocketAddr = format!("{}:{}", address, config.load_balancer.port).parse()?;
     let listener = TcpListener::bind(addr).await?;
@@ -191,7 +198,7 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await
             {
-                error!("Error while serving connection, {}", e);
+                error!("Error while serving connection, {:?}", e);
             }
         });
     }

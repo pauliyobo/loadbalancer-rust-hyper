@@ -13,8 +13,17 @@ pub enum Protocol {
 /// Top level configuration
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    /// Define on which address:port combination the loadbalancer will listen
     pub load_balancer: LoadBalancer,
+    pub server: Vec<Backend>,
+}
+
+/// structure to define information of a targeted backend server
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Backend {
+    /// server address
+    pub address: String,
+    /// Server port
+    pub port: u16,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,8 +42,15 @@ impl Default for Config {
             load_balancer: LoadBalancer {
                 address: None,
                 port: 80,
-                protocol: Protocol::Http
-            }
+                protocol: Protocol::Http,
+            },
+            server: vec![Backend {
+                port: 8080,
+                address: "localhost".to_string(),
+            }, Backend {
+                port: 8001,
+                address: "test".to_string()
+            }],
         }
     }
 }
